@@ -38,7 +38,7 @@ from deap import algorithms
 from deap import base
 from deap import creator
 from deap import tools
-
+import optuna
 
 creator.create("Fitness", base.Fitness, weights=(1.0, -1.0, -1.0))
 creator.create("Individual", list, fitness=creator.Fitness)
@@ -120,7 +120,32 @@ def _createIndividual(icls, n, max_features):
     return icls(genome)
 
 
-def _evalFunction(individual, estimator, X, y, cv, scorer, fit_params, max_features,
+# def _evalFunction(individual, estimator, X, y, cv, scorer, fit_params, max_features,
+#                   caching, scores_cache={}):
+#     individual_sum = np.sum(individual, axis=0)
+#     if individual_sum == 0 or individual_sum > max_features:
+#         return -10000, individual_sum, 10000
+#     individual_tuple = tuple(individual)
+#     if caching and individual_tuple in scores_cache:
+#         return scores_cache[individual_tuple][0], individual_sum, scores_cache[individual_tuple][1]
+#     X_selected = X[:, np.array(individual, dtype=np.bool)]
+#     scores = cross_val_score(estimator=estimator, X=X_selected, y=y, scoring=scorer, cv=cv,
+#                              fit_params=fit_params)
+#     scores_mean = np.mean(scores)
+#     scores_std = np.std(scores)
+#     if caching:
+#         scores_cache[individual_tuple] = [scores_mean, scores_std]
+#     return scores_mean, individual_sum, scores_std
+
+def _run_optuna_study(objective,n_trials=10,pruner_threshold_upper=1.0):
+    study = optuna.create_study(direction="maximize",pruner=optuna.pruners.ThresholdPruner(upper=pruner_threshold_upper))
+    study.optimize(objective, n_trials=n_trials)
+    print(f'best trial: {study.best_trial}')
+    best_hyperparams = study.best_params
+    print(f'best hyperparameters: {best_hyperparams}')
+    return best_hyperparams
+
+def _eval_optuna_function(individual, estimator, objective_func,X, y, cv, scorer, max_features,
                   caching, scores_cache={}):
     individual_sum = np.sum(individual, axis=0)
     if individual_sum == 0 or individual_sum > max_features:
@@ -129,16 +154,73 @@ def _evalFunction(individual, estimator, X, y, cv, scorer, fit_params, max_featu
     if caching and individual_tuple in scores_cache:
         return scores_cache[individual_tuple][0], individual_sum, scores_cache[individual_tuple][1]
     X_selected = X[:, np.array(individual, dtype=np.bool)]
-    scores = cross_val_score(estimator=estimator, X=X_selected, y=y, scoring=scorer, cv=cv,
-                             fit_params=fit_params)
+
+    best_hyperparams = _run_optuna_study(objective_func)
+
+    # run again to calculate std
+    scores = cross_val_score(estimator=estimator.set_params(**best_hyperparams), X=X_selected, y=y, scoring=scorer, cv=cv)
     scores_mean = np.mean(scores)
     scores_std = np.std(scores)
+
     if caching:
         scores_cache[individual_tuple] = [scores_mean, scores_std]
     return scores_mean, individual_sum, scores_std
 
 
-class GeneticSelectionCV(BaseEstimator, MetaEstimatorMixin, SelectorMixin):
+# https://stackoverflow.com/questions/12019961/python-pickling-nested-functions
+class CreationOptunaObjectiveFunc(object):
+    def __init__(self,estimator,X,y,scorer,cv) -> None:
+        self.estimator = estimator
+        self.X = X
+        self.y = y
+        self.scorer = scorer
+        self.cv = cv
+
+    def __call__(self,trial):
+        param = {
+            "verbosity": 0,
+            "objective": "binary:logistic",
+            # use exact for small dataset.
+            "tree_method": 'gpu_hist', #"exact", 
+            # defines booster, gblinear for linear functions.
+            "booster": trial.suggest_categorical("booster", ["gbtree", "gblinear", "dart"]),
+            # L2 regularization weight.
+            "lambda": trial.suggest_float("lambda", 1e-8, 1.0, log=True),
+            # L1 regularization weight.
+            "alpha": trial.suggest_float("alpha", 1e-8, 1.0, log=True),
+            # sampling ratio for training data.
+            "subsample": trial.suggest_float("subsample", 0.2, 1.0),
+            # sampling according to each tree.
+            "colsample_bytree": trial.suggest_float("colsample_bytree", 0.2, 1.0),
+            "eval_metric": "mlogloss",
+            "use_label_encoder":False
+        }
+
+        if param["booster"] in ["gbtree", "dart"]:
+            # maximum depth of the tree, signifies complexity of the tree.
+            param["max_depth"] = trial.suggest_int("max_depth", 3, 9, step=2)
+            # minimum child weight, larger the term more conservative the tree.
+            param["min_child_weight"] = trial.suggest_int("min_child_weight", 2, 10)
+            param["eta"] = trial.suggest_float("eta", 1e-8, 1.0, log=True)
+            # defines how selective algorithm is.
+            param["gamma"] = trial.suggest_float("gamma", 1e-8, 1.0, log=True)
+            param["grow_policy"] = trial.suggest_categorical("grow_policy", ["depthwise", "lossguide"])
+
+        if param["booster"] == "dart":
+            param["sample_type"] = trial.suggest_categorical("sample_type", ["uniform", "weighted"])
+            param["normalize_type"] = trial.suggest_categorical("normalize_type", ["tree", "forest"])
+            param["rate_drop"] = trial.suggest_float("rate_drop", 1e-8, 1.0, log=True)
+            param["skip_drop"] = trial.suggest_float("skip_drop", 1e-8, 1.0, log=True)
+
+        scores = cross_val_score(estimator=self.estimator.set_params(**param), X=self.X, y=self.y, scoring=self.scorer, cv=self.cv)
+        scores_mean = np.mean(scores)
+
+        if trial.should_prune():
+            raise optuna.TrialPruned()
+
+        return scores_mean
+
+class GeneticSelectionXGBoostCV(BaseEstimator, MetaEstimatorMixin, SelectorMixin):
     """Feature selection with genetic algorithm.
 
     Parameters
@@ -268,6 +350,47 @@ class GeneticSelectionCV(BaseEstimator, MetaEstimatorMixin, SelectorMixin):
     def _estimator_type(self):
         return self.estimator._estimator_type
 
+    # def create_optuna_objective(self,estimator,X,y,scorer,cv):
+    #     def objective(trial):
+    #         param = {
+    #             "verbosity": None,
+    #             "objective": "binary:logistic",
+    #             # use exact for small dataset.
+    #             "tree_method": "exact", #'gpu_hist',
+    #             # defines booster, gblinear for linear functions.
+    #             "booster": trial.suggest_categorical("booster", ["gbtree", "gblinear", "dart"]),
+    #             # L2 regularization weight.
+    #             "lambda": trial.suggest_float("lambda", 1e-8, 1.0, log=True),
+    #             # L1 regularization weight.
+    #             "alpha": trial.suggest_float("alpha", 1e-8, 1.0, log=True),
+    #             # sampling ratio for training data.
+    #             "subsample": trial.suggest_float("subsample", 0.2, 1.0),
+    #             # sampling according to each tree.
+    #             "colsample_bytree": trial.suggest_float("colsample_bytree", 0.2, 1.0),
+    #         }
+
+    #         if param["booster"] in ["gbtree", "dart"]:
+    #             # maximum depth of the tree, signifies complexity of the tree.
+    #             param["max_depth"] = trial.suggest_int("max_depth", 3, 9, step=2)
+    #             # minimum child weight, larger the term more conservative the tree.
+    #             param["min_child_weight"] = trial.suggest_int("min_child_weight", 2, 10)
+    #             param["eta"] = trial.suggest_float("eta", 1e-8, 1.0, log=True)
+    #             # defines how selective algorithm is.
+    #             param["gamma"] = trial.suggest_float("gamma", 1e-8, 1.0, log=True)
+    #             param["grow_policy"] = trial.suggest_categorical("grow_policy", ["depthwise", "lossguide"])
+
+    #         if param["booster"] == "dart":
+    #             param["sample_type"] = trial.suggest_categorical("sample_type", ["uniform", "weighted"])
+    #             param["normalize_type"] = trial.suggest_categorical("normalize_type", ["tree", "forest"])
+    #             param["rate_drop"] = trial.suggest_float("rate_drop", 1e-8, 1.0, log=True)
+    #             param["skip_drop"] = trial.suggest_float("skip_drop", 1e-8, 1.0, log=True)
+
+    #         scores = cross_val_score(estimator=estimator.set_params(**param), X=X, y=y, scoring=scorer, cv=cv)
+    #         scores_mean = np.mean(scores)
+
+    #         return scores_mean
+    #     return objective
+
     def fit(self, X, y):
         """Fit the GeneticSelectionCV model and then the underlying estimator on the selected
            features.
@@ -309,14 +432,20 @@ class GeneticSelectionCV(BaseEstimator, MetaEstimatorMixin, SelectorMixin):
 
         estimator = clone(self.estimator)
 
+        #objective_func = self.create_optuna_objective(estimator,X,y,scorer,cv)
+        objective_func = CreationOptunaObjectiveFunc(estimator,X,y,scorer,cv)
+
         # Genetic Algorithm
         toolbox = base.Toolbox()
 
         toolbox.register("individual", _createIndividual, creator.Individual, n=n_features,
                          max_features=max_features)
         toolbox.register("population", tools.initRepeat, list, toolbox.individual)
-        toolbox.register("evaluate", _evalFunction, estimator=estimator, X=X, y=y, cv=cv,
-                         scorer=scorer, fit_params=self.fit_params, max_features=max_features,
+        # toolbox.register("evaluate", _evalFunction, estimator=estimator, X=X, y=y, cv=cv,
+        #                  scorer=scorer, fit_params=self.fit_params, max_features=max_features,
+        #                  caching=self.caching, scores_cache=self.scores_cache)
+        toolbox.register("evaluate", _eval_optuna_function, estimator=estimator, X=X, y=y, cv=cv,
+                         scorer=scorer, max_features=max_features,objective_func=objective_func,
                          caching=self.caching, scores_cache=self.scores_cache)
         toolbox.register("mate", tools.cxUniform, indpb=self.crossover_independent_proba)
         toolbox.register("mutate", tools.mutFlipBit, indpb=self.mutation_independent_proba)
@@ -351,12 +480,18 @@ class GeneticSelectionCV(BaseEstimator, MetaEstimatorMixin, SelectorMixin):
 
         # Set final attributes
         support_ = np.array(hof, dtype=np.bool)[0]
+        self.estimator_final_tune = clone(self.estimator)
+        # objective_func_final_tune = self.create_optuna_objective(estimator,X[:, support_],y,scorer,cv)
+        objective_func_final_tune = CreationOptunaObjectiveFunc(estimator,X[:, support_],y,scorer,cv)
+        best_final_parameters = _run_optuna_study(objective_func_final_tune)
         self.estimator_ = clone(self.estimator)
+        self.estimator_.set_params(**best_final_parameters)
         self.estimator_.fit(X[:, support_], y)
 
         self.generation_scores_ = np.array([score for score, _, _ in log.select("max")])
         self.n_features_ = support_.sum()
         self.support_ = support_
+        self.best_final_parameters_ = best_final_parameters
 
         final_scores = cross_val_score(estimator=self.estimator_, X=X[:, support_], y=y, scoring=scorer, cv=cv)
         final_scores_mean = np.mean(final_scores)

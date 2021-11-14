@@ -14,5 +14,6 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 from .gscv import GeneticSelectionCV
+from .gscv_xgboost import GeneticSelectionXGBoostCV
 
 __version__ = '0.4.1'
