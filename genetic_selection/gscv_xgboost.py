@@ -169,17 +169,18 @@ def _eval_optuna_function(individual, estimator, objective_func,X, y, cv, scorer
 
 # https://stackoverflow.com/questions/12019961/python-pickling-nested-functions
 class CreationOptunaObjectiveFunc(object):
-    def __init__(self,estimator,X,y,scorer,cv) -> None:
+    def __init__(self,estimator,X,y,scorer,cv,xgb_objective) -> None:
         self.estimator = estimator
         self.X = X
         self.y = y
         self.scorer = scorer
         self.cv = cv
+        self.xgb_objective = xgb_objective
 
     def __call__(self,trial):
         param = {
             "verbosity": 0,
-            "objective": "binary:logistic",
+            "objective": self.xgb_objective,#"reg:squarederror",
             # use exact for small dataset.
             "tree_method": 'gpu_hist', #"exact", 
             # defines booster, gblinear for linear functions.
@@ -327,7 +328,7 @@ class GeneticSelectionXGBoostCV(BaseEstimator, MetaEstimatorMixin, SelectorMixin
                  verbose=0, n_jobs=1, n_population=300, crossover_proba=0.5, mutation_proba=0.2,
                  n_generations=40, crossover_independent_proba=0.1,
                  mutation_independent_proba=0.05, tournament_size=3, n_gen_no_change=None,
-                 caching=False):
+                 caching=False,xgb_objective="reg:squarederror"):
         self.estimator = estimator
         self.cv = cv
         self.scoring = scoring
@@ -344,6 +345,7 @@ class GeneticSelectionXGBoostCV(BaseEstimator, MetaEstimatorMixin, SelectorMixin
         self.tournament_size = tournament_size
         self.n_gen_no_change = n_gen_no_change
         self.caching = caching
+        self.xgb_objective = xgb_objective
         self.scores_cache = {}
 
     @property
@@ -411,6 +413,7 @@ class GeneticSelectionXGBoostCV(BaseEstimator, MetaEstimatorMixin, SelectorMixin
         cv = check_cv(self.cv, y, classifier=is_classifier(self.estimator))
         scorer = check_scoring(self.estimator, scoring=self.scoring)
         n_features = X.shape[1]
+        xgb_objective = self.xgb_objective
 
         if self.max_features is not None:
             if not isinstance(self.max_features, numbers.Integral):
@@ -433,7 +436,7 @@ class GeneticSelectionXGBoostCV(BaseEstimator, MetaEstimatorMixin, SelectorMixin
         estimator = clone(self.estimator)
 
         #objective_func = self.create_optuna_objective(estimator,X,y,scorer,cv)
-        objective_func = CreationOptunaObjectiveFunc(estimator,X,y,scorer,cv)
+        objective_func = CreationOptunaObjectiveFunc(estimator,X,y,scorer,cv,xgb_objective)
 
         # Genetic Algorithm
         toolbox = base.Toolbox()
@@ -482,7 +485,7 @@ class GeneticSelectionXGBoostCV(BaseEstimator, MetaEstimatorMixin, SelectorMixin
         support_ = np.array(hof, dtype=np.bool)[0]
         self.estimator_final_tune = clone(self.estimator)
         # objective_func_final_tune = self.create_optuna_objective(estimator,X[:, support_],y,scorer,cv)
-        objective_func_final_tune = CreationOptunaObjectiveFunc(estimator,X[:, support_],y,scorer,cv)
+        objective_func_final_tune = CreationOptunaObjectiveFunc(estimator,X[:, support_],y,scorer,cv,xgb_objective)
         best_final_parameters = _run_optuna_study(objective_func_final_tune)
         self.estimator_ = clone(self.estimator)
         self.estimator_.set_params(**best_final_parameters)
