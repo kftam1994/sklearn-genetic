@@ -1,10 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Fri Nov 26 14:07:31 2021
-
-@author: andykftam
-"""
-
 import pandas as pd
 import numpy as np
 from io import BytesIO
@@ -12,7 +5,7 @@ import pmdarima as pm
 from pmdarima import model_selection
 from genetic_selection import GeneticSelectionPmdarimaCV
 
-friedman2_path = r'D:\Users\andykftam\Downloads\SARIMAX\friedman2.dta'
+friedman2_path = r'Downloads\SARIMAX\friedman2.dta'
 friedman2_file = open(friedman2_path,mode='rb')
 data = pd.read_stata(BytesIO(friedman2_file.read()))
 data.index = data.time
