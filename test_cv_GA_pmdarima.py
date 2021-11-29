@@ -4,13 +4,13 @@ from io import BytesIO
 import pmdarima as pm
 from pmdarima import model_selection
 from genetic_selection import GeneticSelectionPmdarimaCV
-import requests
+# import requests
 
-# friedman2_path = r'Downloads\SARIMAX\friedman2.dta'
-# friedman2_file = open(friedman2_path,mode='rb')
-# data = pd.read_stata(BytesIO(friedman2_file.read()))
-friedman2 = requests.get('https://www.stata-press.com/data/r12/friedman2.dta').content
-data = pd.read_stata(BytesIO(friedman2))
+friedman2_path = r'D:\Users\andykftam\Downloads\SARIMAX\friedman2.dta'
+friedman2_file = open(friedman2_path,mode='rb')
+data = pd.read_stata(BytesIO(friedman2_file.read()))
+# friedman2 = requests.get('https://www.stata-press.com/data/r12/friedman2.dta').content
+# data = pd.read_stata(BytesIO(friedman2))
 data.index = data.time
 
 raw = data.loc['1959':'1981', :]
@@ -34,9 +34,9 @@ mod.plot_diagnostics()
 
 cv = model_selection.RollingForecastCV(step=4, h=1)
 
+estimator = pm.arima.ARIMA(**mod.get_params())
 
-
-mod_cv_scores = model_selection.cross_val_score(estimator=mod, X=X_raw, y=Y_raw , scoring='mean_squared_error', cv=cv, verbose=2)
+mod_cv_scores = model_selection.cross_val_score(estimator=estimator, X=X_raw, y=Y_raw , scoring='mean_squared_error', cv=cv, verbose=2)
 average_error = np.average(mod_cv_scores)
 print(average_error)
 #117.0487185350244
@@ -60,8 +60,10 @@ selector = GeneticSelectionPmdarimaCV(
                             tournament_size=3, n_gen_no_change=10,
                             caching=True, n_jobs=1)
 selector = selector.fit(X=X_raw, y=Y_raw)
-#122.96869095972544
-print('Features:', selector.support_)
-# TODO: same model but different coefficients
-selector.estimator_.summary()
+#Final scores: 28.131191464969625, SD: 43.34445730019391
+print('Features:', X_raw.columns[selector.support_])
+
+fitted_model = selector.estimator_.fit(X=X_raw.iloc[:, selector.support_], y=Y_raw)
+fitted_model.summary()
 selector.estimator_.plot_diagnostics()
+
