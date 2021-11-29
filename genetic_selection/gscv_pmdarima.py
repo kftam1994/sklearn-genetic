@@ -27,6 +27,7 @@ from sklearn.base import is_classifier
 from sklearn.model_selection import check_cv #, cross_val_score
 from sklearn.metrics import check_scoring
 from pmdarima import model_selection
+import pmdarima as pm
 try:
     from sklearn.feature_selection import SelectorMixin  # scikit-learn>=0.23.0
 except ImportError:
@@ -134,8 +135,11 @@ def _evalFunction(individual, estimator, X, y, cv, scorer, fit_params, max_featu
     #                          fit_params=fit_params)
     
     # select the best model
-    mod = estimator.fit(y=y,X=X_selected).model_
-    scores = model_selection.cross_val_score(estimator=mod, X=X_selected, y=y, scoring=scorer, cv=cv, verbose=2)
+    best_mod = estimator.fit(y=y,X=X_selected).model_
+    # evaluate the model
+    estimator_arima_with_best_param = pm.arima.ARIMA(**best_mod.get_params())
+    scores = model_selection.cross_val_score(estimator=estimator_arima_with_best_param, X=X_selected, y=y, scoring=scorer, cv=cv, verbose=2)
+    # scores = model_selection.cross_val_score(estimator=mod, X=X_selected, y=y, scoring=scorer, cv=cv, verbose=2)
     scores_mean = np.mean(scores)
     scores_std = np.std(scores)
     if caching:
@@ -357,7 +361,8 @@ class GeneticSelectionPmdarimaCV(BaseEstimator, MetaEstimatorMixin, SelectorMixi
 
         # Set final attributes
         support_ = np.array(hof, dtype=np.bool)[0]
-        self.estimator_ = self.estimator.fit(y=y,X=X[:, support_]).model_
+        best_mod = self.estimator.fit(y=y,X=X[:, support_]).model_
+        self.estimator_ = pm.arima.ARIMA(**best_mod.get_params())
         #self.estimator_ = clone(self.estimator)
         self.estimator_.fit(X=X[:, support_], y=y)
 

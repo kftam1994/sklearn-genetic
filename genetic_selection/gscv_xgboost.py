@@ -39,10 +39,13 @@ from deap import base
 from deap import creator
 from deap import tools
 import optuna
+import random
 
 creator.create("Fitness", base.Fitness, weights=(1.0, -1.0, -1.0))
 creator.create("Individual", list, fitness=creator.Fitness)
 
+random.seed(55)
+np.random.seed(55)
 
 def _eaFunction(population, toolbox, cxpb, mutpb, ngen, ngen_no_change=None, stats=None,
                 halloffame=None, verbose=0):
@@ -145,7 +148,7 @@ def _run_optuna_study(objective,n_trials=10,pruner_threshold_upper=1.0):
     print(f'best hyperparameters: {best_hyperparams}')
     return best_hyperparams
 
-def _eval_optuna_function(individual, estimator, objective_func,X, y, cv, scorer, max_features,
+def _eval_optuna_function(individual, estimator, xgb_objective,X, y, cv, scorer, max_features,
                   caching, scores_cache={}):
     individual_sum = np.sum(individual, axis=0)
     if individual_sum == 0 or individual_sum > max_features:
@@ -155,12 +158,14 @@ def _eval_optuna_function(individual, estimator, objective_func,X, y, cv, scorer
         return scores_cache[individual_tuple][0], individual_sum, scores_cache[individual_tuple][1]
     X_selected = X[:, np.array(individual, dtype=np.bool)]
 
+    objective_func = CreationOptunaObjectiveFunc(estimator,X_selected,y,scorer,cv,xgb_objective)
     best_hyperparams = _run_optuna_study(objective_func)
 
     # run again to calculate std
     scores = cross_val_score(estimator=estimator.set_params(**best_hyperparams), X=X_selected, y=y, scoring=scorer, cv=cv)
     scores_mean = np.mean(scores)
     scores_std = np.std(scores)
+
 
     if caching:
         scores_cache[individual_tuple] = [scores_mean, scores_std]
@@ -435,8 +440,8 @@ class GeneticSelectionXGBoostCV(BaseEstimator, MetaEstimatorMixin, SelectorMixin
 
         estimator = clone(self.estimator)
 
-        #objective_func = self.create_optuna_objective(estimator,X,y,scorer,cv)
-        objective_func = CreationOptunaObjectiveFunc(estimator,X,y,scorer,cv,xgb_objective)
+        # create inside _eval_optuna_function to include only selected fields
+        #objective_func = CreationOptunaObjectiveFunc(estimator,X,y,scorer,cv,xgb_objective)
 
         # Genetic Algorithm
         toolbox = base.Toolbox()
@@ -448,7 +453,7 @@ class GeneticSelectionXGBoostCV(BaseEstimator, MetaEstimatorMixin, SelectorMixin
         #                  scorer=scorer, fit_params=self.fit_params, max_features=max_features,
         #                  caching=self.caching, scores_cache=self.scores_cache)
         toolbox.register("evaluate", _eval_optuna_function, estimator=estimator, X=X, y=y, cv=cv,
-                         scorer=scorer, max_features=max_features,objective_func=objective_func,
+                         scorer=scorer, max_features=max_features,xgb_objective=xgb_objective,
                          caching=self.caching, scores_cache=self.scores_cache)
         toolbox.register("mate", tools.cxUniform, indpb=self.crossover_independent_proba)
         toolbox.register("mutate", tools.mutFlipBit, indpb=self.mutation_independent_proba)

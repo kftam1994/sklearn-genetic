@@ -4,10 +4,13 @@ from io import BytesIO
 import pmdarima as pm
 from pmdarima import model_selection
 from genetic_selection import GeneticSelectionPmdarimaCV
+import requests
 
-friedman2_path = r'Downloads\SARIMAX\friedman2.dta'
-friedman2_file = open(friedman2_path,mode='rb')
-data = pd.read_stata(BytesIO(friedman2_file.read()))
+# friedman2_path = r'Downloads\SARIMAX\friedman2.dta'
+# friedman2_file = open(friedman2_path,mode='rb')
+# data = pd.read_stata(BytesIO(friedman2_file.read()))
+friedman2 = requests.get('https://www.stata-press.com/data/r12/friedman2.dta').content
+data = pd.read_stata(BytesIO(friedman2))
 data.index = data.time
 
 raw = data.loc['1959':'1981', :]
