@@ -139,9 +139,11 @@ def _evalFunction(individual, estimator, X, y, cv, scorer, fit_params, max_featu
     # evaluate the model
     estimator_arima_with_best_param = pm.arima.ARIMA(**best_mod.get_params())
     scores = model_selection.cross_val_score(estimator=estimator_arima_with_best_param, X=X_selected, y=y, scoring=scorer, cv=cv, verbose=2)
+    # as it is maximization, use negative score instead to minimize error
+    neg_scores = -scores
     # scores = model_selection.cross_val_score(estimator=mod, X=X_selected, y=y, scoring=scorer, cv=cv, verbose=2)
-    scores_mean = np.mean(scores)
-    scores_std = np.std(scores)
+    scores_mean = np.mean(neg_scores)
+    scores_std = np.std(neg_scores)
     if caching:
         scores_cache[individual_tuple] = [scores_mean, scores_std]
     return scores_mean, individual_sum, scores_std
@@ -364,7 +366,7 @@ class GeneticSelectionPmdarimaCV(BaseEstimator, MetaEstimatorMixin, SelectorMixi
         best_mod = self.estimator.fit(y=y,X=X[:, support_]).model_
         self.estimator_ = pm.arima.ARIMA(**best_mod.get_params())
         #self.estimator_ = clone(self.estimator)
-        self.estimator_.fit(X=X[:, support_], y=y)
+        # self.estimator_.fit(X=X[:, support_], y=y)
 
         self.generation_scores_ = np.array([score for score, _, _ in log.select("max")])
         self.n_features_ = support_.sum()
